@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Mercury: Survival</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050505;color:#eee;font-family:system-ui,Arial,sans-serif}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#hud{position:fixed;inset:0;pointer-events:none}
+.panel{background:rgba(10,10,10,.68);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(5px);border-radius:12px;padding:10px}
+#stats{position:absolute;top:10px;left:10px;width:220px}
+.bar{height:9px;background:#222;border-radius:6px;overflow:hidden;margin:3px 0 7px}
+.fill{height:100%;width:100%;transition:width .2s}
+#health{background:#e05252}#oxygen{background:#64b5f6}#energy{background:#ffd45c}#temp{background:#ff8b4d}
+#objective{position:absolute;top:10px;right:10px;max-width:270px}
+#msg{position:absolute;left:50%;bottom:18%;transform:translateX(-50%);font-weight:700;text-align:center;text-shadow:0 2px 6px #000;max-width:90%}
+#cross{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:22px;color:#fff;text-shadow:0 1px 5px #000}
+#controls{position:absolute;left:12px;right:12px;bottom:12px;display:flex;justify-content:space-between;align-items:end}
+.pad{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(2,52px);gap:6px;pointer-events:auto}
+button{border:1px solid #777;background:rgba(35,35,35,.8);color:white;border-radius:12px;font-size:20px;touch-action:none}
+button:active{background:#555}
+#actions{display:flex;gap:8px;pointer-events:auto}
+#actions button{font-size:14px;padding:0 13px;height:52px}
+.small{font-size:12px;color:#bbb}
+#start{position:fixed;inset:0;background:radial-gradient(circle at 50% 45%,#443a34,#090909 65%);display:flex;align-items:center;justify-content:center;z-index:5}
+.card{width:min(500px,90vw);padding:28px;border-radius:18px;background:rgba(12,12,12,.9);border:1px solid #555;text-align:center}
+.card h1{font-size:34px;margin:0 0 4px}.card p{color:#bbb;line-height:1.5}
+#begin{width:100%;height:54px;font-size:17px;margin-top:12px;background:#d17c45;border:0}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="start"><div class="card">
+<h1>🪐 Mercury: Survival</h1>
+<p>You are stranded on Mercury. Your spacecraft is damaged. Find the repair parts, manage your oxygen and energy, and make it back before the planet wins.</p>
+<p class="small">Desktop: WASD + mouse. Mobile: buttons + drag the screen to look.</p>
+<button id="begin">BEGIN SURVIVAL</button>
+</div></div>
+<div id="hud">
+<div id="stats" class="panel">
+<b>Survival Systems</b><br>
+<span>❤️ Health</span><div class="bar"><div id="health" class="fill"></div></div>
+<span>🫁 Oxygen</span><div class="bar"><div id="oxygen" class="fill"></div></div>
+<span>⚡ Energy</span><div class="bar"><div id="energy" class="fill"></div></div>
+<span>🌡️ Body temperature</span><div class="bar"><div id="temp" class="fill"></div></div>
+<div class="small">Day <span id="day">1</span> · Sol <span id="sol">00:00</span></div>
+</div>
+<div id="objective" class="panel"><b>OBJECTIVE</b><br><span id="obj">Search the surface for 3 repair components.</span><div class="small" id="parts">Parts: 0 / 3</div></div>
+<div id="cross">+</div><div id="msg"></div>
+<div id="controls">
+<div class="pad">
+<button data-k="w">▲</button><button data-k="look" style="opacity:.45">•</button><button data-k="e">E</button>
+<button data-k="a">◀</button><button data-k="s">▼</button><button data-k="d">▶</button>
+</div>
+<div id="actions"><button id="scan">SCAN</button><button id="rest">REST</button></div>
+</div>
+</div>
+<script>
+const c=document.getElementById('game'),ctx=c.getContext('2d');
+let W=innerWidth,H=innerHeight,dpr=devicePixelRatio||1;
+function resize(){W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}addEventListener('resize',resize);resize();
+
+const keys={w:false,a:false,s:false,d:false};
+const state={started:false,x:0,y:0,ang:0,health:100,oxygen:100,energy:100,temp:50,parts:0,time:0,rest:0,won:false};
+const rocks=[];
+for(let i=0;i<95;i++) rocks.push({x:(Math.random()-.5)*2400,y:(Math.random()-.5)*2400,r:4+Math.random()*18,shade:55+Math.random()*45});
+const items=[];
+for(let i=0;i<3;i++){items.push({x:(Math.random()-.5)*1500,y:(Math.random()-.5)*1500,got:false})}
+const crater=[];
+for(let i=0;i<32;i++) crater.push({x:(Math.random()-.5)*2200,y:(Math.random()-.5)*2200,r:15+Math.random()*45});
+
+function msg(t){const m=document.getElementById('msg');m.textContent=t;clearTimeout(msg.t);msg.t=setTimeout(()=>m.textContent='',2800)}
+function bar(id,v){document.getElementById(id).style.width=Math.max(0,Math.min(100,v))+'%'}
+function updateHUD(){
+bar('health',state.health);bar('oxygen',state.oxygen);bar('energy',state.energy);
+bar('temp',state.temp<50?state.temp*2:(100-state.temp)*2);
+document.getElementById('parts').textContent=`Parts: ${state.parts} / 3`;
+document.getElementById('day').textContent=Math.floor(state.time/120)+1;
+let sec=Math.floor(state.time%120);document.getElementById('sol').textContent=`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+document.getElementById('obj').textContent=state.parts<3?'Search the surface for 3 repair components.':'Return to your spacecraft and repair it.';
+}
+function worldToScreen(x,y){
+const dx=x-state.x,dy=y-state.y;
+const ca=Math.cos(-state.ang),sa=Math.sin(-state.ang);
+return {x:W/2+dx*ca-dy*sa,y:H/2+dx*sa+dy*ca};
+}
+function draw(){
+ctx.fillStyle='#292421';ctx.fillRect(0,0,W,H);
+const g=ctx.createRadialGradient(W*.5,H*.48,40,W*.5,H*.48,Math.max(W,H)*.75);
+g.addColorStop(0,'#6b5a50');g.addColorStop(.5,'#403a36');g.addColorStop(1,'#181717');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+for(const cr of crater){const p=worldToScreen(cr.x,cr.y);if(p.x<-100||p.x>W+100||p.y<-100||p.y>H+100)continue;
+ctx.beginPath();ctx.arc(p.x,p.y,cr.r,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.18)';ctx.fill();ctx.beginPath();ctx.arc(p.x-3,p.y-3,cr.r*.72,0,Math.PI*2);ctx.strokeStyle='rgba(170,150,135,.18)';ctx.stroke()}
+for(const r of rocks){const p=worldToScreen(r.x,r.y);if(p.x<-30||p.x>W+30||p.y<-30||p.y>H+30)continue;ctx.beginPath();ctx.arc(p.x,p.y,r.r,0,Math.PI*2);ctx.fillStyle=`rgb(${r.shade},${r.shade-7},${r.shade-12})`;ctx.fill();ctx.strokeStyle='rgba(0,0,0,.3)';ctx.stroke()}
+for(const it of items)if(!it.got){const p=worldToScreen(it.x,it.y);ctx.beginPath();ctx.arc(p.x,p.y,9,0,Math.PI*2);ctx.fillStyle='#65d6ff';ctx.fill();ctx.strokeStyle='#fff';ctx.stroke()}
+const ship=worldToScreen(0,0);ctx.save();ctx.translate(ship.x,ship.y);ctx.rotate(state.ang);ctx.fillStyle='#ddd';ctx.fillRect(-22,-13,44,26);ctx.fillStyle='#222';ctx.fillRect(-8,-8,16,16);ctx.restore();
+ctx.fillStyle='rgba(255,255,255,.04)';ctx.fillRect(0,0,W,H);
+}
+function near(a,b,dist){return Math.hypot(a.x-b.x,a.y-b.y)<dist}
+function tick(dt){
+if(!state.started||state.won)return;
+state.time+=dt;
+const speed=keys.w?38:keys.s?-25:0;const str=(keys.d?1:0)-(keys.a?1:0);
+state.x+=Math.cos(state.ang)*speed*dt+Math.cos(state.ang+Math.PI/2)*str*25*dt;
+state.y+=Math.sin(state.ang)*speed*dt+Math.sin(state.ang+Math.PI/2)*str*25*dt;
+state.oxygen-=dt*.75;state.energy-=dt*.28;
+const heat=Math.sin(state.time/18)*.5+.5;
+state.temp += ((heat*100)-state.temp)*dt*.012;
+if(state.temp<5||state.temp>95)state.health-=dt*.8;
+if(state.oxygen<=0)state.health-=dt*3;
+if(state.energy<0)state.health-=dt*.3;
+for(const it of items)if(!it.got&&near(state,it,28)){it.got=true;state.parts++;msg('Repair component recovered! 🔧')}
+if(near(state,{x:0,y:0},65)&&state.parts===3){state.won=true;document.getElementById('obj').textContent='SPACECRAFT REPAIRED. You survived Mercury.';msg('🚀 SPACECRAFT REPAIRED — SURVIVAL SUCCESSFUL!');}
+if(state.health<=0){state.started=false;msg('Your survival systems failed. Refresh to try again.');}
+updateHUD();draw();
+}
+function scan(){if(!state.started)return;let nearest=items.filter(i=>!i.got).sort((a,b)=>Math.hypot(a.x-state.x,a.y-state.y)-Math.hypot(b.x-state.x,b.y-state.y))[0];if(nearest){const d=Math.hypot(nearest.x-state.x,nearest.y-state.y);msg(`Scanner: component ${Math.round(d)} m away.`)}else msg(state.parts<3?'No signal.':'All components recovered. Return to the spacecraft.')}
+function rest(){if(!state.started)return;state.energy=Math.min(100,state.energy+18);state.oxygen=Math.max(0,state.oxygen-2);msg('Resting... energy restored.')}
+document.getElementById('begin').onclick=()=>{state.started=true;document.getElementById('start').classList.add('hidden');msg('Mercury is waiting. Find the repair components.');};
+document.getElementById('scan').onclick=scan;document.getElementById('rest').onclick=rest;
+document.querySelectorAll('[data-k]').forEach(b=>{const k=b.dataset.k;if(!['w','a','s','d'].includes(k))return;b.onpointerdown=()=>keys[k]=true;b.onpointerup=b.onpointercancel=b.onpointerleave=()=>keys[k]=false});
+addEventListener('keydown',e=>{if(e.key.toLowerCase() in keys)keys[e.key.toLowerCase()]=true;if(e.key==='e')scan()});
+addEventListener('keyup',e=>{if(e.key.toLowerCase() in keys)keys[e.key.toLowerCase()]=false});
+let dragging=false,lastX=0;
+c.onpointerdown=e=>{dragging=true;lastX=e.clientX};c.onpointerup=()=>dragging=false;c.onpointercancel=()=>dragging=false;
+c.onpointermove=e=>{if(dragging){state.ang+=(e.clientX-lastX)*.006;lastX=e.clientX}};
+let last=performance.now();function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;tick(dt);requestAnimationFrame(loop)}requestAnimationFrame(loop);
+</script>
+</body>
+</html>
